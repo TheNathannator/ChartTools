@@ -1,6 +1,12 @@
 ﻿using ChartTools.Lyrics;
 using ChartTools.SystemExtensions.Linq;
 
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+
 namespace ChartTools.IO.Chart
 {
     /// <summary>
@@ -8,11 +14,8 @@ namespace ChartTools.IO.Chart
     /// </summary>
     internal static partial class ChartParser
     {
-        internal static readonly ReadingConfiguration DefaultReadConfig = new()
-        {
-            DuplicateTrackObjectPolicy = DuplicateTrackObjectPolicy.ThrowException,
-            SoloNoStarPowerRule = SoloNoStarPowerPolicy.Convert
-        };
+        internal static readonly ReadingConfiguration DefaultReadConfig = new() { SoloNoStarPowerRule = SoloNoStarPowerPolicy.Convert };
+        private delegate void NoteCase<TChord>(Track<TChord> track, ref TChord? chord, uint position, NoteData data, ref bool newChord) where TChord : Chord;
 
         /// <summary>
         /// Reads a chart file.
@@ -196,56 +199,7 @@ namespace ChartTools.IO.Chart
         /// </returns>
         /// <param name="part">Lines of the file belonging to the track</param>
         /// <inheritdoc cref="GetTrack{TChord}(IEnumerable{string}, Func{Track{TChord}, TChord, TrackObjectEntry, NoteData, bool, TChord}, ReadingConfiguration)" path="/exception"/>
-        public static Track<DrumsChord>? GetDrumsTrack(IEnumerable<string> part, ReadingConfiguration? config) => GetTrack<DrumsChord>(part, (track, chord, entry, data, newChord) =>
-        {
-            // Body of noteCase in GetTrack call
-
-            // Find the parent chord or create it
-            if (chord is null)
-                    chord = new(entry.Position);
-                else if (entry.Position != chord.Position)
-                    chord = track.Chords.FirstOrDefault(c => c.Position == entry.Position, new(entry.Position), out newChord);
-                else
-                    newChord = false;
-
-                switch (data.NoteIndex)
-                {
-                // Note
-                case < 5:
-                        chord!.Notes.Add(new((DrumsLane)data.NoteIndex) { SustainLength = data.SustainLength });
-                        break;
-                // Double kick
-                case 32:
-                        chord!.Notes.Add(new(DrumsLane.DoubleKick));
-                        break;
-                // Cymbal
-                case > 65 and < 69:
-                        DrumsNote? note = null;
-                    // NoteIndex of the note to set as cymbal
-                    byte seekedIndex = (byte)(data.NoteIndex - 63);
-
-                    // Find matching note
-                    note = chord!.Notes.FirstOrDefault(n => n.NoteIndex == seekedIndex, null, out bool returnedDefault);
-
-                        if (returnedDefault)
-                        {
-                            chord.Notes.Add(new((DrumsLane)(seekedIndex + 1)) { IsCymbal = true, SustainLength = data.SustainLength });
-                            returnedDefault = false;
-                        }
-                        else
-                            note!.IsCymbal = true;
-                        break;
-                    case 109:
-                        chord!.Modifier |= DrumsChordModifier.Flam;
-                        break;
-                }
-
-                if (newChord)
-                    track.Chords.Add(chord!);
-
-            // Instance gets lost if not returned back to GetTrack
-            return chord!;
-        }, config);
+        public static Track<DrumsChord>? GetDrumsTrack(IEnumerable<string> part, ReadingConfiguration? config) => GetTrack<DrumsChord>(part, DrumsNoteCase, config);
 
         /// <summary>
         /// Reads a Guitar Hero Live track from a chart file.
@@ -281,48 +235,7 @@ namespace ChartTools.IO.Chart
         /// </returns>
         /// <param name="part">Lines in the file belonging to the track</param>
         /// <inheritdoc cref="GetTrack{TChord}(IEnumerable{string}, Func{Track{TChord}, TChord, TrackObjectEntry, NoteData, bool, TChord}, ReadingConfiguration)" path="/exception"/>
-        private static Track<GHLChord>? GetGHLTrack(IEnumerable<string> part, ReadingConfiguration? config) => GetTrack<GHLChord>(part, (track, chord, entry, data, newChord) =>
-        {
-        // Body of noteCase in GetTrack call
-
-        // Find the parent chord or create it
-        if (chord is null)
-                chord = new(entry.Position);
-            else if (entry.Position != chord.Position)
-                chord = track.Chords.FirstOrDefault(c => c.Position == entry.Position, new(entry.Position), out newChord);
-            else
-                newChord = false;
-
-            switch (data.NoteIndex)
-            {
-            // White notes
-            case < 3:
-                    chord!.Notes.Add(new((GHLLane)(data.NoteIndex + 4)) { SustainLength = data.SustainLength });
-                    break;
-            // Black 1 and 2
-            case < 5:
-                    chord!.Notes.Add(new((GHLLane)(data.NoteIndex - 2)) { SustainLength = data.SustainLength });
-                    break;
-                case 5:
-                    chord!.Modifier |= GHLChordModifier.Invert;
-                    break;
-                case 6:
-                    chord!.Modifier |= GHLChordModifier.Tap;
-                    break;
-                case 7:
-                    chord!.Notes.Add(new(GHLLane.Open) { SustainLength = data.SustainLength });
-                    break;
-                case 8:
-                    chord!.Notes.Add(new(GHLLane.Black3) { SustainLength = data.SustainLength });
-                    break;
-            }
-
-            if (newChord)
-                track.Chords.Add(chord!);
-
-        // Instance gets lost if not returned back to GetTrack
-        return chord!;
-        }, config);
+        private static Track<GHLChord>? GetGHLTrack(IEnumerable<string> part, ReadingConfiguration? config) => GetTrack<GHLChord>(part, GHLNoteCase, config);
 
         /// <summary>
         /// Reads a standard track from a chart file.
@@ -357,41 +270,7 @@ namespace ChartTools.IO.Chart
         /// </returns>
         /// <param name="part">Lines in the file belonging to the track</param>
         /// <inheritdoc cref="GetTrack{TChord}(IEnumerable{string}, Func{Track{TChord}, TChord, TrackObjectEntry, NoteData, bool, TChord}, ReadingConfiguration)" path="/exception"/>
-        private static Track<StandardChord>? GetStandardTrack(IEnumerable<string> part, ReadingConfiguration? config) => GetTrack<StandardChord>(part, (track, chord, entry, data, newChord) =>
-        {
-        // Body of noteCase in GetTrack call
-
-        // Find the parent chord or create it
-        if (chord is null)
-                chord = new(entry.Position);
-            else if (entry.Position != chord.Position)
-                chord = track.Chords.FirstOrDefault(c => c.Position == entry.Position, new(entry.Position), out newChord);
-            else
-                newChord = false;
-
-            switch (data.NoteIndex)
-            {
-            // Colored note
-            case < 5:
-                    chord!.Notes.Add(new((StandardLane)(data.NoteIndex + 1)) { SustainLength = data.SustainLength });
-                    break;
-                case 5:
-                    chord!.Modifier |= StandardChordModifier.Natural;
-                    break;
-                case 6:
-                    chord!.Modifier |= StandardChordModifier.Tap;
-                    break;
-                case 7:
-                    chord!.Notes.Add(new(StandardLane.Open) { SustainLength = data.SustainLength });
-                    break;
-            }
-
-            if (newChord)
-                track.Chords.Add(chord!);
-
-        // Instance gets lost if not returned back to GetTrack
-        return chord!;
-        }, config);
+        private static Track<StandardChord>? GetStandardTrack(IEnumerable<string> part, ReadingConfiguration? config) => GetTrack<StandardChord>(part, StandardNoteCase, config);
 
         /// <summary>
         /// Gets a track from a portion of a chart file.
@@ -402,13 +281,35 @@ namespace ChartTools.IO.Chart
         /// <param name="part">Lines in the file belonging to the track</param>
         /// <param name="noteCase">Function that handles entries containing note data. Must return the same chord received as a parameter.</param>
         /// <exception cref="FormatException"/>
-        private static Track<TChord>? GetTrack<TChord>(IEnumerable<string> part, Func<Track<TChord>, TChord?, TrackObjectEntry, NoteData, bool, TChord> noteCase, ReadingConfiguration? config) where TChord : Chord
+        private static Track<TChord>? GetTrack<TChord>(IEnumerable<string> part, NoteCase<TChord> noteCase, ReadingConfiguration? config) where TChord : Chord
         {
             config ??= DefaultReadConfig;
             Track<TChord> track = new();
-
             TChord? chord = null;
             bool newChord = true;
+            HashSet<(uint, byte)> ignoredNotes = new();
+            Func<uint, NoteData, bool> includeNote = config.DuplicateTrackObjectPolicy switch
+            {
+                DuplicateTrackObjectPolicy.IncludeAll => (_, _) => true,
+                DuplicateTrackObjectPolicy.IncludeFirst => (position, data) =>
+                {
+                    if (ignoredNotes.Contains((position, data.NoteIndex)))
+                        return false;
+
+                    ignoredNotes.Add((position, data.NoteIndex));
+                    return true;
+                },
+                DuplicateTrackObjectPolicy.ThrowException => (position, data) =>
+                {
+                    if (ignoredNotes.Contains((position, data.NoteIndex)))
+                        throw new Exception("Duplicate chord"); // TODO Make better exception
+                    else
+                    {
+                        ignoredNotes.Add((position, data.NoteIndex));
+                        return true;
+                    }
+                },
+            };
 
             foreach (string line in part)
             {
@@ -430,7 +331,10 @@ namespace ChartTools.IO.Chart
                         try
                         {
                             data = new(entry.Data);
-                            chord = noteCase(track, chord, entry, data, newChord);
+                            noteCase(track, ref chord, entry.Position, data, ref newChord);
+
+                            if (includeNote(entry.Position, data) && newChord)
+                                track.Chords.Add(chord!);
                         }
                         catch (Exception e) { throw GetLineException(line, e); }
 
@@ -459,6 +363,111 @@ namespace ChartTools.IO.Chart
                 && track.LocalEvents!.Count == 0
                 && track.StarPower.Count == 0
                 ? null : track;
+        }
+
+        private static void DrumsNoteCase(Track<DrumsChord> track, ref DrumsChord? chord, uint position, NoteData data, ref bool newChord)
+        {
+            // Find the parent chord or create it
+            if (chord is null)
+                chord = new(position);
+            else if (position != chord.Position)
+                chord = track.Chords.FirstOrDefault(c => c.Position == position, new(position), out newChord);
+            else
+                newChord = false;
+
+            switch (data.NoteIndex)
+            {
+                // Note
+                case < 5:
+                    chord!.Notes.Add(new((DrumsLane)data.NoteIndex) { SustainLength = data.SustainLength });
+                    break;
+                // Double kick
+                case 32:
+                    chord!.Notes.Add(new(DrumsLane.DoubleKick));
+                    break;
+                // Cymbal
+                case > 65 and < 69:
+                    DrumsNote? note = null;
+                    // NoteIndex of the note to set as cymbal
+                    byte seekedIndex = (byte)(data.NoteIndex - 64);
+
+                    // Find matching note
+                    note = chord!.Notes.FirstOrDefault(n => n.NoteIndex == seekedIndex, null, out bool returnedDefault);
+
+                    if (returnedDefault)
+                    {
+                        chord.Notes.Add(new((DrumsLane)seekedIndex) { IsCymbal = true, SustainLength = data.SustainLength });
+                        returnedDefault = false;
+                    }
+                    else
+                        note!.IsCymbal = true;
+                    break;
+                case 109:
+                    chord!.Modifier |= DrumsChordModifier.Flam;
+                    break;
+            }
+
+        }
+        private static void GHLNoteCase(Track<GHLChord> track, ref GHLChord? chord, uint position, NoteData data, ref bool newChord)
+        {
+            // Find the parent chord or create it
+            if (chord is null)
+                chord = new(position);
+            else if (position != chord.Position)
+                chord = track.Chords.FirstOrDefault(c => c.Position == position, new(position), out newChord);
+            else
+                newChord = false;
+
+            switch (data.NoteIndex)
+            {
+                // White notes
+                case < 3:
+                    chord!.Notes.Add(new((GHLLane)(data.NoteIndex + 4)) { SustainLength = data.SustainLength });
+                    break;
+                // Black 1 and 2
+                case < 5:
+                    chord!.Notes.Add(new((GHLLane)(data.NoteIndex - 2)) { SustainLength = data.SustainLength });
+                    break;
+                case 5:
+                    chord!.Modifier |= GHLChordModifier.Invert;
+                    break;
+                case 6:
+                    chord!.Modifier |= GHLChordModifier.Tap;
+                    break;
+                case 7:
+                    chord!.Notes.Add(new(GHLLane.Open) { SustainLength = data.SustainLength });
+                    break;
+                case 8:
+                    chord!.Notes.Add(new(GHLLane.Black3) { SustainLength = data.SustainLength });
+                    break;
+            }
+        }
+        private static void StandardNoteCase(Track<StandardChord> track, ref StandardChord? chord, uint position, NoteData data, ref bool newChord)
+        {
+            // Find the parent chord or create it
+            if (chord is null)
+                chord = new(position);
+            else if (position != chord.Position)
+                chord = track.Chords.FirstOrDefault(c => c.Position == position, new(position), out newChord);
+            else
+                newChord = false;
+
+            switch (data.NoteIndex)
+            {
+                // Colored note
+                case < 5:
+                    chord!.Notes.Add(new((StandardLane)(data.NoteIndex + 1)) { SustainLength = data.SustainLength });
+                    break;
+                case 5:
+                    chord!.Modifier |= StandardChordModifier.Invert;
+                    break;
+                case 6:
+                    chord!.Modifier |= StandardChordModifier.Tap;
+                    break;
+                case 7:
+                    chord!.Notes.Add(new(StandardLane.Open) { SustainLength = data.SustainLength });
+                    break;
+            }
         }
         #endregion
 
@@ -662,6 +671,29 @@ namespace ChartTools.IO.Chart
         {
             config ??= DefaultReadConfig;
             SyncTrack syncTrack = new();
+            HashSet<uint> ignoredTempos = new(), ignoredAnchors = new(), ignoredSignatures = new();
+
+            Func<uint, HashSet<uint>, bool> includeObject = config.DuplicateTrackObjectPolicy switch
+            {
+                DuplicateTrackObjectPolicy.IncludeAll => (_, _) => true,
+                DuplicateTrackObjectPolicy.IncludeFirst => (position, ignored) =>
+                {
+                    if (ignored.Contains(position))
+                        return false;
+
+                    ignored.Add(position);
+                    return true;
+                }
+                ,
+                DuplicateTrackObjectPolicy.ThrowException => (position, ignored) =>
+                {
+                    if (ignored.Contains(position))
+                        throw new Exception("Duplicate chord"); // TODO Make better exception;
+
+                    ignored.Add(position);
+                    return true;
+                }
+            };
 
             foreach (string line in GetPart(lines, "SyncTrack"))
             {
@@ -675,6 +707,9 @@ namespace ChartTools.IO.Chart
                 {
                     // Time signature
                     case "TS":
+                        if (!includeObject(entry.Position, ignoredSignatures))
+                            break;
+
                         string[] split = GetDataSplit(entry.Data);
 
                         byte denominator;
@@ -698,6 +733,9 @@ namespace ChartTools.IO.Chart
                         break;
                     // Tempo
                     case "B":
+                        if (!includeObject(entry.Position, ignoredTempos))
+                            break;
+
                         // Floats are written by rounding to the 3rd decimal and removing the decimal point
                         if (float.TryParse(entry.Data, out float value))
                             value /= 1000;
@@ -714,6 +752,9 @@ namespace ChartTools.IO.Chart
                         break;
                     // Anchor
                     case "A":
+                        if (!includeObject(entry.Position, ignoredAnchors))
+                            break;
+
                         // Floats are written by rounding to the 3rd decimal and removing the decimal point
                         if (float.TryParse(entry.Data, out float anchor))
                             anchor /= 1000;

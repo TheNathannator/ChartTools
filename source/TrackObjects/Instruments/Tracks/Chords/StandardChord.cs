@@ -1,4 +1,6 @@
 ﻿using ChartTools.IO.Chart;
+using System;
+using System.Collections.Generic;
 
 namespace ChartTools
 {
